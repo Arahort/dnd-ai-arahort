@@ -7,6 +7,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import subprocess
 import socketserver
 import sys
@@ -260,5 +261,62 @@ class HostTests(unittest.TestCase):
             self.assertEqual(environment["HTTPS_PROXY"], "http://account:secret@proxy.test:3128")
             self.assertEqual(arguments.count("--build-arg"), 4)
             self.assertEqual(installer.build_proxy_args(""), ([], {}))
+    def test_installer_uses_only_author_release_config_and_refuses_unbound_remote_before_changes(self):
+        try:
+            import grp
+        except ImportError:
+            sys.modules["grp"] = types.SimpleNamespace()
+        sys.modules["host"] = host_module
+        spec = importlib.util.spec_from_file_location("dnd_installer", pathlib.Path(__file__).with_name("install.py"))
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        with tempfile.TemporaryDirectory() as folder:
+            source = pathlib.Path(folder) / "source"
+            source.mkdir()
+            config = source / "release-source.json"
+            config.write_text(json.dumps({"format": 1, "repository": ""}))
+            with patch.object(installer, "ask", side_effect=AssertionError("Repository selection must never prompt")), patch.object(installer, "yes", side_effect=AssertionError("Repository selection must never ask permission")), patch.object(installer, "ensure_docker", side_effect=AssertionError("Invalid author config must fail before Docker changes")):
+                self.assertEqual(installer.release_repository(source, local=True), "")
+                with self.assertRaisesRegex(ValueError, "--local"):
+                    installer.release_repository(source)
+            for data in ({"format": True, "repository": "author/game"}, {"format": 2, "repository": "author/game"}, {"format": 1, "repository": "https://github.com/author/game"}, {"format": 1, "repository": "author/game;command"}, {"format": 1, "repository": None}, {"format": 1, "repository": "author/game", "url": "https://untrusted.test"}, []):
+                with self.subTest(data=data):
+                    config.write_text(json.dumps(data))
+                    with self.assertRaises(ValueError):
+                        installer.release_repository(source, local=True)
+            config.write_text(json.dumps({"format": 1, "repository": "Publisher/OurGame"}))
+            self.assertEqual(installer.release_repository(source), "Publisher/OurGame")
+            self.assertEqual(installer.release_repository(source, local=True), "Publisher/OurGame")
+            with patch.object(installer, "SOURCE", source):
+                target = pathlib.Path(folder) / "installation"
+                installer.copy_distribution(target, local=False)
+            self.assertEqual(json.loads((target / "release-source.json").read_text()), {"format": 1, "repository": "Publisher/OurGame"})
+            config.unlink()
+            with self.assertRaisesRegex(ValueError, "release-source.json"):
+                installer.release_repository(source, local=True)
+            config.write_text(json.dumps({"format": 1, "repository": ""}))
+            target = pathlib.Path(folder) / "installation-without-state"
+            original_read = pathlib.Path.read_text
+            original_match = re.fullmatch
+            def read_for_test(path, *args, **kwargs):
+                return 'ID=ubuntu\nVERSION_ID="24.04"\n' if path.as_posix().endswith("/etc/os-release") else original_read(path, *args, **kwargs)
+            def match_for_test(pattern, value, *args, **kwargs):
+                # The test runs on Windows too; only bypass the host-specific absolute-path check.
+                return True if pattern == r"/[A-Za-z0-9_./-]+" else original_match(pattern, value, *args, **kwargs)
+            with patch.object(installer, "SOURCE", source), patch.object(installer.os, "geteuid", return_value=0, create=True), patch.object(installer.platform, "machine", return_value="x86_64"), patch.object(pathlib.Path, "read_text", read_for_test), patch.object(re, "fullmatch", match_for_test), patch.object(sys, "argv", ["install.py", "--directory", str(target)]), patch.object(installer, "proxy_question") as proxy, patch.object(installer, "ensure_docker") as docker:
+                with self.assertRaisesRegex(ValueError, "--local"):
+                    installer.main()
+                proxy.assert_not_called()
+                docker.assert_not_called()
+            self.assertFalse(target.exists(), "Unbound remote installer must not create installation files")
+            target.mkdir()
+            saved = target / ".env"
+            saved.write_text("PRESERVED='configuration'\n")
+            installed = types.SimpleNamespace(env={"DND_INSTALL_MODE": "local", "AGY_PROXY": "saved-proxy"})
+            with patch.object(installer, "SOURCE", source), patch.object(installer.os, "geteuid", return_value=0, create=True), patch.object(installer.platform, "machine", return_value="x86_64"), patch.object(pathlib.Path, "read_text", read_for_test), patch.object(re, "fullmatch", match_for_test), patch.object(sys, "argv", ["install.py", "--resume", "--directory", str(target)]), patch.object(installer, "release_repository", side_effect=AssertionError("Resume must keep the saved installation repository")), patch.object(installer, "Host", return_value=installed), patch.object(installer, "ensure_docker") as docker, patch.object(installer, "finish") as finish:
+                installer.main()
+                docker.assert_called_once_with("saved-proxy")
+                finish.assert_called_once_with(installed, True)
+            self.assertEqual(saved.read_text(), "PRESERVED='configuration'\n")
 if __name__ == "__main__":
     unittest.main()

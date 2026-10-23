@@ -15,7 +15,7 @@ const target = fs.createWriteStream(file)
 const archive = archiver('tar', {gzip: true, gzipOptions: {level: 9}})
 const done = new Promise((resolve, reject) => { target.on('close', resolve); target.on('error', reject); archive.on('error', reject) })
 archive.pipe(target)
-const publicFiles = ['install.sh', 'Dockerfile', 'compose.yaml', 'compose.http.yaml', 'compose.https.yaml', 'compose.local.yaml', '.dockerignore', '.env.example', 'README.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md']
+const publicFiles = ['install.sh', 'Dockerfile', 'compose.yaml', 'compose.http.yaml', 'compose.https.yaml', 'compose.local.yaml', '.dockerignore', '.env.example', 'release-source.json', 'README.md', 'LICENSE']
 for (const name of publicFiles) archive.file(path.join(root, name), {name: 'dnd-ai-arahort/' + name})
 for (const name of ['app', 'ops', 'docs', 'licenses']) archive.directory(path.join(root, name), 'dnd-ai-arahort/' + name, entry => {
   if (entry.name.split('/').includes('__pycache__') || entry.name.endsWith('.pyc')) return false

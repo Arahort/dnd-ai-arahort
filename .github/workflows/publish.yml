@@ -59,7 +59,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: python3 tools/publish-manifest.py "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$IMAGE_DIGEST" release.json
       - name: Package public installer distribution
-        run: tar -czf /tmp/dnd-release/dnd-ai-arahort.tar.gz install.sh Dockerfile compose.yaml compose.http.yaml compose.https.yaml compose.local.yaml .dockerignore .env.example README.md LICENSE THIRD-PARTY-NOTICES.md ops docs
+        run: tar -czf /tmp/dnd-release/dnd-ai-arahort.tar.gz install.sh Dockerfile compose.yaml compose.http.yaml compose.https.yaml compose.local.yaml .dockerignore .env.example release-source.json README.md LICENSE ops docs
       - name: Attach manifest and installer
         env:
           GH_TOKEN: ${{ github.token }}

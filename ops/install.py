@@ -17,6 +17,22 @@ import sys
 import urllib.parse
 from host import Host, REPOSITORY, VERSION, atomic, read_env, set_env
 SOURCE = pathlib.Path(__file__).resolve().parent.parent
+def release_repository(source, local=False):
+    path = pathlib.Path(source) / "release-source.json"
+    try:
+        if path.stat().st_size > 4096:
+            raise ValueError("Слишком большой release-source.json")
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("В дистрибутиве отсутствует или повреждён release-source.json автора") from error
+    if not isinstance(data, dict) or set(data) != {"format", "repository"} or type(data["format"]) is not int or data["format"] != 1 or not isinstance(data["repository"], str):
+        raise ValueError("Неподдерживаемый release-source.json автора")
+    repository = data["repository"]
+    if repository and not REPOSITORY.fullmatch(repository):
+        raise ValueError("Некорректный репозиторий автора в release-source.json")
+    if not repository and not local:
+        raise ValueError("Дистрибутив ещё не привязан к репозиторию автора. Для локального теста используй --local")
+    return repository
 def ask(label, default=None):
     value = input(label + (f" [{default}]" if default is not None else "") + ": ").strip()
     return value or default or ""
@@ -156,7 +172,7 @@ def copy_distribution(target, local):
     if target == SOURCE:
         return
     target.mkdir(mode=0o755, parents=True, exist_ok=True)
-    for name in ("install.sh", "Dockerfile", "compose.yaml", "compose.http.yaml", "compose.https.yaml", "compose.local.yaml", ".dockerignore", ".env.example", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md"):
+    for name in ("install.sh", "Dockerfile", "compose.yaml", "compose.http.yaml", "compose.https.yaml", "compose.local.yaml", ".dockerignore", ".env.example", "release-source.json", "README.md", "LICENSE"):
         if (SOURCE / name).is_file():
             shutil.copyfile(SOURCE / name, target / name)
     for name in ("ops", "docs"):
@@ -259,16 +275,13 @@ def main():
         local = args.local or host.env.get("DND_INSTALL_MODE") == "local"
         ensure_docker(host.env.get("AGY_PROXY", ""))
         return finish(host, local)
+    repository = release_repository(SOURCE, args.local)
     if args.local and not (SOURCE / "app/server/index.mjs").is_file():
         parser.error("Нет готового app/server/index.mjs; сначала подготовь публичный пакет сборки")
     if target.exists() and target != SOURCE and any(target.iterdir()):
         parser.error("Папка уже содержит файлы; существующую установку не перезаписываю")
     proxy = proxy_question()
     network = network_question()
-    repository = ""
-    if not args.local or yes("Подключить обновления из публичного GitHub-репозитория?"):
-        while not REPOSITORY.fullmatch(repository):
-            repository = ask("GitHub репозиторий автора в формате owner/repository")
     ensure_docker(proxy)
     copy_distribution(target, args.local)
     try:

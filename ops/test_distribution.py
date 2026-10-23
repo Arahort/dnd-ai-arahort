@@ -4,6 +4,8 @@ import importlib.util
 import io
 import json
 import pathlib
+import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -58,5 +60,23 @@ class DistributionTests(unittest.TestCase):
         workflow = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())
         self.assertIn("jobs", workflow)
         self.assertTrue(any("gh release upload" in step.get("run", "") for step in workflow["jobs"]["publish"]["steps"]))
+        packager = next(step["run"] for step in workflow["jobs"]["publish"]["steps"] if step.get("name") == "Package public installer distribution")
+        self.assertIn("release-source.json", packager.split())
+        self.assertNotIn("THIRD-PARTY-NOTICES.md", packager.split())
+    def test_publisher_embeds_only_validated_author_repository_beside_release_manifest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = pathlib.Path(folder) / "release.json"
+            source = target.with_name("release-source.json")
+            source.write_text(json.dumps({"format": 1, "repository": "unexpected/previous"}))
+            command = [sys.executable, str(ROOT / "tools/publish-manifest.py"), "Publisher/OurGame", "v0.1.1", "sha256:" + "f" * 64, str(target)]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(source.read_text()), {"format": 1, "repository": "Publisher/OurGame"})
+            self.assertEqual(json.loads(target.read_text())["image"], "ghcr.io/publisher/ourgame@sha256:" + "f" * 64)
+            before = (target.read_text(), source.read_text())
+            command[2] = "https://untrusted.test/Publisher/OurGame"
+            refused = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertEqual((target.read_text(), source.read_text()), before)
 if __name__ == "__main__":
     unittest.main()

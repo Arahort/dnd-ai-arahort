@@ -60,7 +60,7 @@ const npmCli = process.env.npm_execpath || path.join(path.dirname(process.execPa
 const npmResult = spawnSync(process.execPath, [npmCli, 'install', '--package-lock-only', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {cwd: output, stdio: 'inherit'})
 if (npmResult.status !== 0) throw new Error('Could not create the production dependency lockfile')
 fs.writeFileSync(path.join(output, 'release.json'), JSON.stringify({format: 1, version, schemaVersion: 1, builtAt: new Date().toISOString(), model: 'gemini-3.8-flash-high', author: 'Arahort'}, null, 2) + '\n')
-for (const file of ['LICENSE', 'THIRD-PARTY-NOTICES.md']) if (fs.existsSync(path.join(root, file))) fs.copyFileSync(path.join(root, file), path.join(output, file))
+for (const file of ['LICENSE']) if (fs.existsSync(path.join(root, file))) fs.copyFileSync(path.join(root, file), path.join(output, file))
 const notices = []
 const productionLock = JSON.parse(fs.readFileSync(path.join(output, 'package-lock.json'), 'utf8'))
 const licensedPackages = new Map(Object.entries(privateLock.packages).filter(([key, value]) => key && !value.dev))
