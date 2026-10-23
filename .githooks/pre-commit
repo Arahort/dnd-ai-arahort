@@ -1,0 +1,14 @@
+#!/bin/sh
+git diff --cached --name-only | while IFS= read -r name; do
+    case "$name" in
+        .private/*|app/*|artifacts/*|node_modules/*|*/node_modules/*|__pycache__/*|*/__pycache__/*|*.pyc|backups/*|.state/*|*.log)
+            echo "Public commit rejected: private/runtime file $name" >&2
+            exit 1
+            ;;
+        .env.example) ;;
+        .env|.env.*|*/.env|*/.env.*)
+            echo "Public commit rejected: environment file $name" >&2
+            exit 1
+            ;;
+    esac
+done

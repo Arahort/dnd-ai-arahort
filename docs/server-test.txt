@@ -1,0 +1,71 @@
+# DND AI Arahort — первый прогон на отдельном тестовом сервере
+# Автор: Arahort — arahort.pro, alex@arahort.pro
+# ОС: чистая Ubuntu Server 24.04 LTS x86_64, SSH и sudo.
+# Это первый реальный тест Docker/AGY/OAuth; локальные автоматические тесты его не заменяют.
+# Через PhpStorm залей только artifacts/dnd-ai-arahort-0.1.0-local.tar.gz в /tmp/dnd-ai-arahort-0.1.0-local.tar.gz.
+# В архиве уже есть установщик, документация и готовая app/. Закрытые исходники, аккаунты и партии в него не входят.
+# На чистом сервере распакуй архив в /opt следующей строкой. Если /opt/dnd-ai-arahort уже используется, сначала проверь её вручную.
+sudo tar --no-same-owner --no-same-permissions -xzf /tmp/dnd-ai-arahort-0.1.0-local.tar.gz -C /opt
+# Каждая команда ниже — отдельная строка. Не присылай .env, OAuth-файлы, Docker inspect/compose config с секретами.
+# 1. Проверить ОС и архитектуру.
+cat /etc/os-release
+uname -m
+# 2. Установить локальный готовый билд; исходники TypeScript на сервере не нужны.
+# В мастере: местоположение сервера, прокси при необходимости, IP/домен, логин и пароль администратора.
+# Для первого теста без GitHub выбирай локальную установку без подключения удалённых обновлений.
+sudo bash /opt/dnd-ai-arahort/install.sh --local
+# Если установка прервалась, повторять с --resume: существующие env/БД/Google-профиль сохраняются.
+sudo bash /opt/dnd-ai-arahort/install.sh --local --resume
+# 3. Посмотреть состояние службы и версии, не выводя секреты.
+sudo systemctl status dnd-ai-arahort-updater --no-pager
+sudo dndctl status
+sudo stat -c '%a %U:%G %n' /opt/dnd-ai-arahort/.env /run/dnd-ai-arahort /run/dnd-ai-arahort/updater.sock /var/lib/dnd-ai-arahort/control /var/lib/dnd-ai-arahort/control/maintenance.json
+# Ожидается .env 600, директория сокета 750 root:dnd-updater, сокет 660 root:dnd-updater.
+# Контрольная директория root:root 755, maintenance.json root:root 644; приложение видит её только для чтения.
+# 4. Проверить health внутри реального контейнера и список сервисов.
+sudo python3 -c 'import sys,json; sys.path.insert(0,"/opt/dnd-ai-arahort/ops"); from host import Host; c=Host(); print(c.compose("ps","--format","json").stdout.decode()); print(json.dumps(c.wait_healthy(),ensure_ascii=False,indent=2))'
+# 5. Активировать собственный Google-аккаунт через настроенный прокси.
+sudo --preserve-env=SSH_CONNECTION,SSH_CLIENT,SSH_TTY dndctl login
+# В интерактивной AGY: открыть показанный URL входа на своём компьютере, завершить подтверждение по подсказкам CLI.
+# Затем внутри AGY выбрать Gemini 3.8 Flash High и отправить: Ответь ровно DND_GEMINI_OK
+# Реальный DND_GEMINI_OK подтверждает генерацию. /usage показывает квоту, но не подтверждает ответы модели.
+# Выйти из интерактивной AGY через Ctrl+C. Процесс игры работает отдельно и не останавливается.
+# 6. Браузерный прогон.
+# Открой URL, показанный установщиком, войди администратором.
+# Создай одноразовое приглашение; в отдельном профиле браузера зарегистрируй игрока.
+# В админке открой «Лимиты Gemini», нажми «Проверить лимиты» и сравни аккаунт/оба окна квот с /usage внутри AGY.
+# Повтор того же приглашения для другого имени должен отказать. Обычный игрок не создаёт приглашения.
+# Создай партию и персонажа, дождись оснащения, выполни настоящий ход, получи ответ Мастера.
+# Запроси один арт и новую Edge-озвучку; дождись окончания всех операций.
+# Проверь наблюдателя: без player-приглашения он не должен получить роль игрока или увидеть player-код.
+# Экспортируй тестовую партию, открой импорт в админке, сопоставь участников и импортируй новой партией.
+# Проверь карточки/NPC/инвентарь/HP/чат/шёпоты/арт/день и инициативу. Импорт сам не вызывает Мастера.
+# 7. Замерить ресурсы после успешных запросов, затем при ещё одном игровом ходе.
+sudo docker --host unix:///var/run/docker.sock stats --no-stream dnd-ai-arahort-app-1 dnd-ai-arahort-db-1
+free -m
+df -h /var/lib/dnd-ai-arahort
+sudo du -sh /var/lib/dnd-ai-arahort/data /var/lib/dnd-ai-arahort/home /var/lib/dnd-ai-arahort/postgres /var/lib/dnd-ai-arahort/backups
+# 8. Проверить обычный restart приложения после завершения хода, без удаления данных.
+sudo python3 -c 'import sys; sys.path.insert(0,"/opt/dnd-ai-arahort/ops"); from host import Host; c=Host(); print(c.compose("restart","app").stdout.decode()); h=c.wait_healthy(); assert h.get("maintenance") is False,h; print(h)'
+# Снова открыть партию; вход Google и данные должны сохраниться. Выполнить ещё один настоящий ход.
+# 9. Сделать полную тестовую копию. На время копирования новые изменения блокируются.
+sudo dndctl backup
+# Сохрани показанный путь backup. Не отправляй содержимое копии: она включает приватные данные и Google-токены.
+# 10. Проверить effort; команда также делает копию и безопасно пересоздаёт приложение.
+sudo dndctl effort medium
+sudo dndctl effort high
+# После возврата high проверить настоящий ход и отсутствие потери состояния партии.
+# Вне активного хода повторить restart существующего контейнера: после обновления/effort нельзя застревать в maintenance.
+sudo python3 -c 'import sys; sys.path.insert(0,"/opt/dnd-ai-arahort/ops"); from host import Host; c=Host(); print(c.compose("restart","app").stdout.decode()); h=c.wait_healthy(); assert h.get("maintenance") is False,h; print(h)'
+# 11. Локальная проверка обновления. Сначала через IDE замени только готовую app/ новым билдом.
+# Следующая команда читает proxy из своего .env, передаёт его через env сборки без пароля в аргументах.
+sudo python3 -c 'import sys,json; sys.path.insert(0,"/opt/dnd-ai-arahort/ops"); from host import Host; from install import build_proxy_args; c=Host(); r=json.loads((c.root/"app/release.json").read_text()); a,e=build_proxy_args(c.env.get("AGY_PROXY","")); c.run(["docker","build",*a,"--label","org.opencontainers.image.version="+r["version"],"--tag","dnd-ai-arahort:test-next",str(c.root)],extra_env=e,timeout=1800,output=sys.stdout.buffer)'
+sudo dndctl update-local dnd-ai-arahort:test-next
+sudo dndctl status
+# Проверить партию, Google-вход, ещё один ход, арт и озвучку. Старые образы пока не удалять.
+# 12. Для диагностики — только ограниченные журналы, без env и OAuth.
+sudo dndctl logs
+sudo journalctl -u dnd-ai-arahort-updater --no-pager -n 100
+# Пришли результаты установки/health/версии, ошибки без токенов и сведения о CPU/RAM успешной партии.
+# Отдельный следующий этап: на копии сервера принудительно проверить плохой билд, автоматический откат и restore.
+# Полное restore заменяет все более поздние данные; не запускать на нужной партии без осознанного выбора копии.

@@ -1,0 +1,11 @@
+.git
+.private
+artifacts
+node_modules
+.env
+.env.*
+backups
+*.log
+tmp
+**/__pycache__
+*.pyc

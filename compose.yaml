@@ -1,0 +1,72 @@
+name: dnd-ai-arahort
+services:
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dnd
+      POSTGRES_USER: dnd
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?Run install.sh first}
+    volumes:
+      - ${DND_STATE_DIR:-/var/lib/dnd-ai-arahort}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U dnd -d dnd]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+    networks: [private]
+  app:
+    image: ${DND_IMAGE:?Run install.sh first}
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      NODE_ENV: production
+      PORT: '3334'
+      PG_HOST: db
+      PG_PORT: '5432'
+      PG_DATABASE: dnd
+      PG_USER: dnd
+      PG_PASSWORD: ${PG_PASSWORD}
+      PUBLIC_URL: ${PUBLIC_URL}
+      DND_TRUST_PROXY: ${DND_TRUST_PROXY:-0}
+      DND_SESSION_SECRET: ${DND_SESSION_SECRET}
+      DND_LLM_PROVIDER: agy
+      DND_MODEL_EFFORT: ${DND_MODEL_EFFORT:-high}
+      DND_AGY_MODEL: gemini-3.8-flash-${DND_MODEL_EFFORT:-high}
+      DND_AGY_EFFORT: ${DND_MODEL_EFFORT:-high}
+      DND_ART_MODEL: gemini-3.8-flash-${DND_MODEL_EFFORT:-high}
+      DND_ART_EFFORT: ${DND_MODEL_EFFORT:-high}
+      DND_UPDATE_TOKEN: ${DND_UPDATE_TOKEN}
+      DND_UPDATER_SOCKET: /run/dnd-updater/updater.sock
+      DND_START_MAINTENANCE: ${DND_START_MAINTENANCE:-0}
+      DND_MAINTENANCE_FILE: /run/dnd-control/maintenance.json
+      DND_VERSION: ${DND_VERSION:-local}
+      HTTP_PROXY: ${AGY_PROXY:-}
+      HTTPS_PROXY: ${AGY_PROXY:-}
+      http_proxy: ${AGY_PROXY:-}
+      https_proxy: ${AGY_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,db,app
+      no_proxy: localhost,127.0.0.1,db,app
+      DND_EMBED_ENABLED: 'false'
+    group_add: ['${DND_UPDATER_GID:-1000}']
+    volumes:
+      - ${DND_STATE_DIR:-/var/lib/dnd-ai-arahort}/data:/data
+      - ${DND_STATE_DIR:-/var/lib/dnd-ai-arahort}/home:/home/dnd
+      - ${DND_STATE_DIR:-/var/lib/dnd-ai-arahort}/control:/run/dnd-control:ro
+      - /run/dnd-ai-arahort:/run/dnd-updater:ro
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    tmpfs: ['/tmp:rw,nosuid,nodev,size=256m']
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+    networks: [private]
+networks:
+  private: {}

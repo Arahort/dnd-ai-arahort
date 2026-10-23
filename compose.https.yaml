@@ -1,0 +1,17 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DND_DOMAIN: ${DND_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    ports: ['80:80', '443:443', '443:443/udp']
+    volumes:
+      - ./ops/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${DND_STATE_DIR:-/var/lib/dnd-ai-arahort}/caddy-data:/data
+      - ${DND_STATE_DIR:-/var/lib/dnd-ai-arahort}/caddy-config:/config
+    depends_on: [app]
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+    networks: [private]

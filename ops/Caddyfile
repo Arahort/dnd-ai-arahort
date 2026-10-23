@@ -1,0 +1,8 @@
+{
+	email {$ACME_EMAIL}
+}
+{$DND_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:3334
+	header X-Content-Type-Options nosniff
+}

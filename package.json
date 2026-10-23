@@ -1,0 +1,13 @@
+{
+  "name": "dnd-ai-arahort-distribution",
+  "version": "0.1.0",
+  "private": true,
+  "author": "Arahort <alex@arahort.pro> (https://arahort.pro)",
+  "license": "SEE LICENSE IN LICENSE",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "release": "node tools/build.mjs --archive --local",
+    "verify": "node tools/verify-release.mjs",
+    "test": "node tools/test.mjs"
+  }
+}

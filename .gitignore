@@ -1,0 +1,12 @@
+.private/
+node_modules/
+app/
+artifacts/
+.env
+.env.*
+!.env.example
+.state/
+backups/
+*.log
+__pycache__/
+*.pyc
