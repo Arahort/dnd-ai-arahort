@@ -178,16 +178,18 @@ class Host:
                 text = text.replace(secret, "<redacted>")
         text = re.sub(r"https?://[^\s/@]+:[^\s/@]+@", "http://<redacted>@", text)
         return text[-2000:]
-    def run(self, args, *, timeout=120, input=None, output=None, check=True, extra_env=None):
+    def run(self, args, *, timeout=120, input=None, output=None, check=True, extra_env=None, stream=False):
         # No shell, no password arguments, no inherited host proxy or Docker context.
+        if stream and output is None:
+            raise ValueError("Streaming commands require an explicit output stream")
         env = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root", "LANG": "C.UTF-8"}
         env.update(extra_env or {})
         if args and args[0] == "docker":
             args = ["docker", "--host", "unix:///var/run/docker.sock", *args[1:]]
         stdin = input if hasattr(input, "read") else None
-        result = subprocess.run(args, cwd=self.root, env=env, input=None if stdin else input, stdin=stdin, stdout=output or subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        result = subprocess.run(args, cwd=self.root, env=env, input=None if stdin else input, stdin=stdin, stdout=output or subprocess.PIPE, stderr=subprocess.STDOUT if stream else subprocess.PIPE, timeout=timeout)
         if check and result.returncode:
-            raise RuntimeError(self.redact(result.stderr.decode("utf-8", "replace")) or "Command failed")
+            raise RuntimeError(self.redact((result.stderr or b"").decode("utf-8", "replace")) or f"Command failed (exit {result.returncode}); see command output above")
         return result
     def compose(self, *args, **kwargs):
         mode = self.env.get("DND_NETWORK_MODE", "http")
@@ -611,8 +613,12 @@ def main():
             if not args.value:
                 parser.error("Specify administrator name")
             password = getpass.getpass("Новый пароль: ")
-            if password != getpass.getpass("Повтори пароль: ") or len(password) < 12:
-                parser.error("Passwords must match and have at least 12 characters")
+            if not password:
+                parser.error("Пароль не должен быть пустым")
+            if len(password) > 256 or any(c in password for c in "\r\n\x00"):
+                parser.error("Пароль должен содержать до 256 символов без переносов строк и нулевого символа")
+            if password != getpass.getpass("Повтори пароль: "):
+                parser.error("Пароли не совпали")
             host.compose("exec", "-T", "app", "node", "server/admin-cli.mjs", "reset-password", "--name", args.value, input=(password + "\n").encode())
             result = {"changed": True}
         else:

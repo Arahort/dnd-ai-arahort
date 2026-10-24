@@ -24,6 +24,8 @@ sudo stat -c '%a %U:%G %n' /opt/dnd-ai-arahort/.env /run/dnd-ai-arahort /run/dnd
 # Контрольная директория root:root 755, maintenance.json root:root 644; приложение видит её только для чтения.
 # 4. Проверить health внутри реального контейнера и список сервисов.
 sudo python3 -c 'import sys,json; sys.path.insert(0,"/opt/dnd-ai-arahort/ops"); from host import Host; c=Host(); print(c.compose("ps","--format","json").stdout.decode()); print(json.dumps(c.wait_healthy(),ensure_ascii=False,indent=2))'
+# Проверить выбранный внешний адрес: HTTPS через Caddy или HTTP на выбранном порту.
+sudo python3 -c 'import sys,urllib.request; sys.path.insert(0,"/opt/dnd-ai-arahort/ops"); from host import Host; h=Host(); url=h.env["PUBLIC_URL"].rstrip("/")+"/api/health"; print(url,flush=True); print(urllib.request.urlopen(url,timeout=20).read().decode())'
 # 5. Активировать собственный Google-аккаунт через настроенный прокси.
 sudo --preserve-env=SSH_CONNECTION,SSH_CLIENT,SSH_TTY dndctl login
 # В интерактивной AGY: открыть показанный URL входа на своём компьютере, завершить подтверждение по подсказкам CLI.
@@ -59,7 +61,7 @@ sudo dndctl effort high
 sudo python3 -c 'import sys; sys.path.insert(0,"/opt/dnd-ai-arahort/ops"); from host import Host; c=Host(); print(c.compose("restart","app").stdout.decode()); h=c.wait_healthy(); assert h.get("maintenance") is False,h; print(h)'
 # 11. Локальная проверка обновления. Сначала через IDE замени только готовую app/ новым билдом.
 # Следующая команда читает proxy из своего .env, передаёт его через env сборки без пароля в аргументах.
-sudo python3 -c 'import sys,json; sys.path.insert(0,"/opt/dnd-ai-arahort/ops"); from host import Host; from install import build_proxy_args; c=Host(); r=json.loads((c.root/"app/release.json").read_text()); a,e=build_proxy_args(c.env.get("AGY_PROXY","")); c.run(["docker","build",*a,"--label","org.opencontainers.image.version="+r["version"],"--tag","dnd-ai-arahort:test-next",str(c.root)],extra_env=e,timeout=1800,output=sys.stdout.buffer)'
+sudo python3 -c 'import sys,json; sys.path.insert(0,"/opt/dnd-ai-arahort/ops"); from host import Host; from install import build_proxy_args; c=Host(); r=json.loads((c.root/"app/release.json").read_text()); a,e=build_proxy_args(c.env.get("AGY_PROXY","")); c.run(["docker","build","--progress=plain",*a,"--label","org.opencontainers.image.version="+r["version"],"--tag","dnd-ai-arahort:test-next",str(c.root)],extra_env=e,timeout=1800,output=sys.stdout.buffer,stream=True)'
 sudo dndctl update-local dnd-ai-arahort:test-next
 sudo dndctl status
 # Проверить партию, Google-вход, ещё один ход, арт и озвучку. Старые образы пока не удалять.

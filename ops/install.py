@@ -98,13 +98,28 @@ def proxy_question():
 def admin_question():
     while True:
         name = ask("Логин администратора")
-        if not re.fullmatch(r"[A-Za-z0-9_А-Яа-яЁё.@+-]{3,64}", name):
+        if not 3 <= len(name) <= 64:
             print("От 3 до 64 букв, цифр или символов _.@+-.")
             continue
-        password = getpass.getpass("Пароль администратора (минимум 12 символов): ")
+        if not re.fullmatch(r"[A-Za-z0-9_А-Яа-яЁё.@+-]{3,64}", name):
+            print("Логин содержит недопустимые символы. Введи его вручную буквами, цифрами или символами _.@+-.")
+            continue
+        break
+    print("Ввод пароля скрыт: символы и звёздочки не отображаются.")
+    while True:
+        password = getpass.getpass("Пароль администратора: ")
+        if not password:
+            print("Пароль не должен быть пустым. Повтори ввод пароля.")
+            continue
+        if len(password) > 256:
+            print("Пароль слишком длинный: приложение принимает до 256 символов. Повтори ввод пароля.")
+            continue
+        if any(c in password for c in "\r\n\x00"):
+            print("Пароль содержит недопустимый перенос строки или нулевой символ. Повтори ввод пароля.")
+            continue
         repeat = getpass.getpass("Повтори пароль: ")
-        if len(password) < 12 or password != repeat or any(c in password for c in "\r\n\x00"):
-            print("Пароли должны совпадать, минимум 12 символов.")
+        if password != repeat:
+            print("Пароли не совпали. Повтори ввод пароля и подтверждения.")
             continue
         return name, password
 def port_available(port, bind="0.0.0.0"):
@@ -249,6 +264,7 @@ def build_proxy_args(proxy):
     arguments = [value for key in environment for value in ("--build-arg", key)]
     return arguments, environment
 def finish(host, local):
+    print("Подготавливаю настройки DND и профиль AGY.", flush=True)
     host.initialize_control()
     initialize_agy(host.state / "home")
     if local:
@@ -257,7 +273,8 @@ def finish(host, local):
         version = release.get("version", "")
         if not isinstance(version, str) or not VERSION.fullmatch(version) or release.get("schemaVersion") != 1:
             raise ValueError("Invalid local release version/schema")
-        host.run(["docker", "build", *build_args, "--label", "org.opencontainers.image.version=" + version, "--tag", "dnd-ai-arahort:local", str(host.root)], extra_env=build_env, timeout=1800, output=sys.stdout.buffer)
+        print("Собираю Docker-образ приложения. При первом запуске загрузка зависимостей может занять несколько минут.", flush=True)
+        host.run(["docker", "build", "--progress=plain", *build_args, "--label", "org.opencontainers.image.version=" + version, "--tag", "dnd-ai-arahort:local", str(host.root)], extra_env=build_env, timeout=1800, output=sys.stdout.buffer, stream=True)
         immutable = host.run(["docker", "image", "inspect", "dnd-ai-arahort:local", "--format", "{{.Id}}"], timeout=30).stdout.decode().strip()
         set_env(host.env_path, {"DND_IMAGE": immutable, "DND_VERSION": version})
         host.reload()
@@ -267,9 +284,12 @@ def finish(host, local):
             manifest = json.loads(host.release_path.read_text())
             set_env(host.env_path, {"DND_IMAGE": manifest["image"], "DND_VERSION": manifest["version"]})
             host.reload()
-        host.run(["docker", "pull", host.env["DND_IMAGE"]], timeout=900, output=sys.stdout.buffer)
-    host.compose("up", "-d", "--wait", "db", timeout=180, output=sys.stdout.buffer)
+        print("Загружаю готовый Docker-образ приложения.", flush=True)
+        host.run(["docker", "pull", host.env["DND_IMAGE"]], timeout=900, output=sys.stdout.buffer, stream=True)
+    print("Запускаю PostgreSQL и ожидаю готовности БД.", flush=True)
+    host.compose("up", "-d", "--wait", "db", timeout=180, output=sys.stdout.buffer, stream=True)
     if not (host.state / "bootstrap.done").exists():
+        print("Проверяю создание первого администратора.", flush=True)
         checked = host.compose("run", "--rm", "-T", "--no-deps", "app", "node", "server/admin-cli.mjs", "bootstrap-status", timeout=180)
         initialized = json.loads(checked.stdout).get("initialized")
         if initialized is not True:
@@ -277,14 +297,17 @@ def finish(host, local):
             host.compose("run", "--rm", "-T", "--no-deps", "app", "node", "server/admin-cli.mjs", "bootstrap", "--name", name, input=(password + "\n").encode(), timeout=180)
             del password
         atomic(host.state / "bootstrap.done", "Administrator initialized.\n")
+    print("Настраиваю службу обновлений и запускаю приложение.", flush=True)
     setup_service(host)
-    host.compose("up", "-d", "--wait", timeout=240, output=sys.stdout.buffer)
+    host.compose("up", "-d", "--wait", timeout=240, output=sys.stdout.buffer, stream=True)
+    print("Проверяю готовность приложения.", flush=True)
     host.wait_healthy()
     print("\nПриложение отвечает: " + host.env["PUBLIC_URL"])
     print("Теперь активируй Gemini своим Google-аккаунтом: sudo --preserve-env=SSH_CONNECTION,SSH_CLIENT,SSH_TTY dndctl login")
     print("Открой показанную AGY ссылку на своём компьютере и заверши вход по подсказкам CLI.")
     print("После входа отправь короткое приветствие; доступность генерации проверяется реальным ответом.")
-    print("При доступе через внешний прокси настрой WebSocket на 127.0.0.1:" + host.env.get("HTTP_PORT", "8080"))
+    if host.env.get("DND_NETWORK_MODE") == "external":
+        print("При доступе через внешний прокси настрой WebSocket на 127.0.0.1:" + host.env.get("HTTP_PORT", "8080"))
 def main():
     parser = argparse.ArgumentParser(description="Установка DND AI Arahort на Ubuntu 22.04/24.04/26.04 LTS x86_64")
     parser.add_argument("--local", action="store_true", help="Собрать образ из готового app/, без исходников TypeScript")

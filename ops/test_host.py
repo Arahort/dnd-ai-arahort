@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
 import types
 import unittest
 from unittest.mock import patch
@@ -76,6 +77,81 @@ class FakeHost(host_module.Host):
             raise RuntimeError("candidate health failed")
         return {"ok": True}
 class HostTests(unittest.TestCase):
+    def test_admin_password_accepts_one_character_and_retries_password_without_reasking_name(self):
+        installer = installer_module()
+        output = io.StringIO()
+        with patch.object(installer, "ask", return_value="arahort") as ask, patch.object(installer.getpass, "getpass", side_effect=["", "a", "different", "a", "a"]), contextlib.redirect_stdout(output):
+            self.assertEqual(installer.admin_question(), ("arahort", "a"))
+        ask.assert_called_once_with("Логин администратора")
+        self.assertIn("Пароль не должен быть пустым", output.getvalue())
+        self.assertIn("Пароли не совпали", output.getvalue())
+        self.assertNotIn("минимум", output.getvalue())
+        self.assertNotIn("different", output.getvalue())
+    def test_admin_password_rejects_unsupported_values_before_confirmation(self):
+        installer = installer_module()
+        output = io.StringIO()
+        with patch.object(installer, "ask", side_effect=["\x1b[200~arahort\x1b[201~", "Arahort"]) as ask, patch.object(installer.getpass, "getpass", side_effect=["x" * 257, "bad\npassword", "a", "a"]) as passwords, contextlib.redirect_stdout(output):
+            self.assertEqual(installer.admin_question(), ("Arahort", "a"))
+        self.assertEqual(ask.call_count, 2)
+        self.assertEqual(passwords.call_count, 4)
+        self.assertIn("Логин содержит недопустимые символы", output.getvalue())
+        self.assertIn("слишком длинный", output.getvalue())
+        self.assertIn("недопустимый перенос", output.getvalue())
+        self.assertNotIn("bad\npassword", output.getvalue())
+    def test_host_password_reset_accepts_one_character_and_rejects_empty_input(self):
+        with tempfile.TemporaryDirectory() as folder:
+            host = FakeHost(folder)
+            for answers, accepted in ((["x", "x"], True), ([""], False), (["x", "y"], False)):
+                with self.subTest(answers=answers), patch.object(sys, "argv", ["host.py", "reset-password", "Arahort"]), patch.object(host_module.os, "geteuid", return_value=0, create=True), patch.object(host_module, "Host", return_value=host), patch("getpass.getpass", side_effect=answers), patch.object(host, "compose") as compose, contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    if accepted:
+                        host_module.main()
+                        compose.assert_called_once_with("exec", "-T", "app", "node", "server/admin-cli.mjs", "reset-password", "--name", "Arahort", input=b"x\n")
+                    else:
+                        with self.assertRaises(SystemExit):
+                            host_module.main()
+                        compose.assert_not_called()
+    def test_command_streaming_shows_stderr_before_child_finishes(self):
+        environment = {key: os.environ[key] for key in ("SystemRoot", "WINDIR") if key in os.environ} if os.name == "nt" else {}
+        with tempfile.TemporaryDirectory() as folder:
+            host = FakeHost(folder)
+            progress = pathlib.Path(folder) / "progress.txt"
+            release = pathlib.Path(folder) / "release"
+            errors = []
+            script = "import pathlib,sys,time; sys.stderr.write('build progress\\n'); sys.stderr.flush(); deadline=time.monotonic()+10\nwhile not pathlib.Path(sys.argv[1]).exists() and time.monotonic()<deadline: time.sleep(0.01)"
+            with progress.open("wb") as output:
+                def run_child():
+                    try:
+                        host_module.Host.run(host, [sys.executable, "-c", script, str(release)], output=output, stream=True, timeout=15, extra_env=environment)
+                    except BaseException as error:
+                        errors.append(error)
+                worker = threading.Thread(target=run_child)
+                worker.start()
+                try:
+                    deadline = time.monotonic() + 7
+                    while b"build progress" not in progress.read_bytes() and worker.is_alive() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertIn(b"build progress", progress.read_bytes())
+                    self.assertTrue(worker.is_alive(), "Progress must be visible before the child completes")
+                finally:
+                    release.touch()
+                    worker.join(timeout=16)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(errors, [])
+    def test_binary_command_output_keeps_stderr_separate_and_streaming_errors_remain_clear(self):
+        environment = {key: os.environ[key] for key in ("SystemRoot", "WINDIR") if key in os.environ} if os.name == "nt" else {}
+        with tempfile.TemporaryDirectory() as folder:
+            host = FakeHost(folder)
+            target = pathlib.Path(folder) / "backup.bin"
+            script = "import sys; sys.stdout.buffer.write(b'backup\\x00payload'); sys.stderr.write('warning\\n')"
+            with target.open("wb") as output:
+                result = host_module.Host.run(host, [sys.executable, "-c", script], output=output, extra_env=environment)
+            self.assertEqual(target.read_bytes(), b"backup\x00payload")
+            self.assertEqual(result.stderr.splitlines(), [b"warning"])
+            with target.open("wb") as output, self.assertRaisesRegex(RuntimeError, r"exit 2"):
+                host_module.Host.run(host, [sys.executable, "-c", "import sys; sys.stderr.write('build failed'); sys.exit(2)"], output=output, stream=True, extra_env=environment)
+            self.assertEqual(target.read_bytes(), b"build failed")
+            with self.assertRaisesRegex(ValueError, "explicit output"):
+                host_module.Host.run(host, [sys.executable], stream=True)
     def test_ubuntu_lts_versions_map_to_their_own_docker_repository_and_reject_other_systems(self):
         installer = installer_module()
         for version, codename in (("22.04", "jammy"), ("24.04", "noble"), ("26.04", "resolute")):

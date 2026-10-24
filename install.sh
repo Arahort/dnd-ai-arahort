@@ -6,7 +6,7 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 if ! command -v python3 >/dev/null 2>&1; then
-  echo 'Нужен python3 из стандартной Ubuntu Server 24.04.' >&2
+  echo 'Нужен системный Python 3.10.12+ из Ubuntu Server 22.04 / 24.04 / 26.04 LTS.' >&2
   exit 1
 fi
 exec python3 "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/ops/install.py" "$@"
