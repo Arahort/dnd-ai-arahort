@@ -1,5 +1,5 @@
 # DND AI Arahort
-Independent self-host edition. Work only inside this directory; opt/dnd is the unchanged production reference.
+Independent self-host edition. Work inside this directory; opt/dnd is the separate production source. Its transfer exporter is maintained only under explicit user authorization.
 Development sources are in .private/app and MUST NOT enter the public repository, image, release archive or public logs.
 The public distribution contains compiled application files, installer, Compose, updater, instructions and license notices.
 Author: Arahort, arahort.pro, alex@arahort.pro. Do not add generator/assistant attribution.
@@ -14,7 +14,7 @@ Installer asks Russia/proxy first, then domain/IP mode and administrator login/p
 The author's update repository is embedded in release-source.json by publication; never ask end users for owner/repository. An empty repository is valid only for local testing without remote updates.
 README is an end-user guide: recommend one-shots and preparing the world, characters and plot with AI before creating a party. Author build instructions live in docs/publishing.md.
 Public GitHub distribution must not contain existing secrets, accounts, parties, uploads, old logs or development history.
-Export/import is a new versioned format, implemented after the main self-host functionality; no legacy ZIP compatibility required.
+Archive v2 transfers application account password hashes and stable source identity. Reuse an exact existing login without overwriting its password/privileges/disabled state; create absent accounts as ordinary users. Preserve source creator through mapping. Original opt/dnd now produces v2 through its separate password-confirmed admin transfer export; previous readable ZIPs are not imported. Archive v1 retains manual user mapping.
 Updates must preserve data and authentication, drain in-flight jobs, back up before migrations, check health and handle rollback compatibility.
 Do not expose Docker socket to the web application. A narrow host updater handles allowed installation operations.
 Use MCP git for supported Git actions and Context7 for current library documentation.
