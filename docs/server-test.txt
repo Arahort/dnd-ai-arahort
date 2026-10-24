@@ -2,10 +2,10 @@
 # Автор: Arahort — arahort.pro, alex@arahort.pro
 # ОС: Ubuntu Server 22.04 / 24.04 / 26.04 LTS x86_64, Python 3.10.12+, SSH и sudo.
 # Это первый реальный тест Docker/AGY/OAuth; локальные автоматические тесты его не заменяют.
-# Через PhpStorm залей только artifacts/dnd-ai-arahort-0.1.0-local.tar.gz в /tmp/dnd-ai-arahort-0.1.0-local.tar.gz.
+# Через PhpStorm залей только artifacts/dnd-ai-arahort-0.1.1-local.tar.gz в /tmp/dnd-ai-arahort-0.1.1-local.tar.gz.
 # В архиве уже есть установщик, документация и готовая app/. Закрытые исходники, аккаунты и партии в него не входят.
 # На чистом сервере распакуй архив в /opt следующей строкой. Если /opt/dnd-ai-arahort уже используется, сначала проверь её вручную.
-sudo tar --no-same-owner --no-same-permissions -xzf /tmp/dnd-ai-arahort-0.1.0-local.tar.gz -C /opt
+sudo tar --no-same-owner --no-same-permissions -xzf /tmp/dnd-ai-arahort-0.1.1-local.tar.gz -C /opt
 # Каждая команда ниже — отдельная строка. Не присылай .env, OAuth-файлы, Docker inspect/compose config с секретами.
 # 1. Проверить ОС и архитектуру.
 cat /etc/os-release

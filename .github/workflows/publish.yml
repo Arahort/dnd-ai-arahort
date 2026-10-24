@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing draft Release tag, for example v0.1.0
+        description: Existing draft Release tag, for example v0.1.1
         required: true
         type: string
 permissions:
@@ -22,15 +22,23 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: python3 -c 'import os,re; assert re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", os.environ["RELEASE_TAG"]), "Stable vX.Y.Z tag required"'
+      - name: Require an unpublished stable Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mkdir -p /tmp/dnd-release
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,tagName > /tmp/dnd-release/metadata.json
+          python3 -c 'import json,os; data=json.load(open("/tmp/dnd-release/metadata.json")); assert data["isDraft"] is True and data["isPrerelease"] is False and data["tagName"]==os.environ["RELEASE_TAG"], "Only an unpublished stable Release can be built"'
       - name: Download precompiled draft Release asset
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
-        run: gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern app.tar.gz --dir /tmp/dnd-release
+        run: gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern app.tar.gz --pattern app.tar.gz.sha256 --dir /tmp/dnd-release
       - name: Verify compiled payload and version
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-        run: python3 tools/publish-validate.py /tmp/dnd-release/app.tar.gz . "$RELEASE_TAG"
+        run: python3 tools/publish-validate.py /tmp/dnd-release/app.tar.gz . "$RELEASE_TAG" --checksum /tmp/dnd-release/app.tar.gz.sha256
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -41,7 +49,9 @@ jobs:
         id: name
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
       - name: Build and publish immutable image
         id: build
         uses: docker/build-push-action@v6
@@ -50,18 +60,39 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.name.outputs.image }}
-          labels: org.opencontainers.image.version=${{ inputs.tag }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.name.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
           provenance: mode=min
           sbom: true
+      - name: Verify anonymous image download and compiled version
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}@$IMAGE_DIGEST"
+          anonymous_config="$(mktemp -d "$RUNNER_TEMP/dnd-anonymous.XXXXXX")"
+          printf '{"auths":{}}\n' > "$anonymous_config/config.json"
+          if ! docker --config "$anonymous_config" pull "$image"; then
+            echo "::error::GHCR package must be public before publishing the Release. Change its visibility, then rerun this workflow for the draft."
+            exit 1
+          fi
+          docker run --rm --network none --entrypoint node -e "EXPECTED_VERSION=${RELEASE_TAG#v}" "$image" -e 'const fs=require("node:fs"); const data=JSON.parse(fs.readFileSync("/app/release.json","utf8")); if(data.version!==process.env.EXPECTED_VERSION||data.schemaVersion!==1)process.exit(1); console.log("Compiled image version verified:",data.version)'
       - name: Write release manifest
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: python3 tools/publish-manifest.py "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$IMAGE_DIGEST" release.json
       - name: Package public installer distribution
-        run: tar -czf /tmp/dnd-release/dnd-ai-arahort.tar.gz install.sh Dockerfile compose.yaml compose.http.yaml compose.https.yaml compose.local.yaml .dockerignore .env.example release-source.json README.md LICENSE ops docs
+        run: |
+          tar --exclude=__pycache__ --exclude='*.pyc' -czf /tmp/dnd-release/dnd-ai-arahort.tar.gz install.sh Dockerfile compose.yaml compose.http.yaml compose.https.yaml compose.local.yaml .dockerignore .env.example release-source.json README.md LICENSE ops docs
+          cd /tmp/dnd-release
+          sha256sum dnd-ai-arahort.tar.gz > dnd-ai-arahort.tar.gz.sha256
       - name: Attach manifest and installer
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
-        run: gh release upload "$RELEASE_TAG" release.json /tmp/dnd-release/dnd-ai-arahort.tar.gz --repo "$GITHUB_REPOSITORY" --clobber
+        run: |
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = true
+          gh release upload "$RELEASE_TAG" release.json /tmp/dnd-release/dnd-ai-arahort.tar.gz /tmp/dnd-release/dnd-ai-arahort.tar.gz.sha256 --repo "$GITHUB_REPOSITORY" --clobber
