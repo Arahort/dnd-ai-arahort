@@ -10,13 +10,43 @@ import pathlib
 import platform
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import urllib.parse
 from host import Host, REPOSITORY, VERSION, atomic, read_env, set_env
 SOURCE = pathlib.Path(__file__).resolve().parent.parent
+UBUNTU_RELEASES = {"22.04": "jammy", "24.04": "noble", "26.04": "resolute"}
+def validate_python_runtime():
+    if sys.version_info < (3, 10, 12) or not callable(getattr(tarfile, "data_filter", None)):
+        raise ValueError("Нужен Python 3.10.12 или новее с безопасным tarfile.data_filter; обнови системный Python перед установкой")
+def ubuntu_codename(release):
+    if not isinstance(release, str) or len(release) > 65536:
+        raise ValueError("Некорректный /etc/os-release")
+    fields = {}
+    for raw in release.splitlines():
+        key, separator, value = raw.strip().partition("=")
+        if not separator or key not in ("ID", "VERSION_ID", "VERSION_CODENAME", "UBUNTU_CODENAME"):
+            continue
+        tokens = shlex.split(value, comments=True, posix=True)
+        if len(tokens) != 1 or key in fields:
+            raise ValueError("Некорректный /etc/os-release")
+        fields[key] = tokens[0]
+    version = fields.get("VERSION_ID")
+    if fields.get("ID") != "ubuntu" or version not in UBUNTU_RELEASES:
+        raise ValueError("Поддерживаются Ubuntu 22.04, 24.04 и 26.04 LTS x86_64")
+    codename = UBUNTU_RELEASES[version]
+    for key in ("VERSION_CODENAME", "UBUNTU_CODENAME"):
+        if key in fields and fields[key] != codename:
+            raise ValueError("Версия Ubuntu не соответствует кодовому имени в /etc/os-release")
+    return codename
+def docker_repository_source(codename):
+    if codename not in UBUNTU_RELEASES.values():
+        raise ValueError("Неподдерживаемый выпуск Ubuntu для Docker")
+    return f"Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: {codename}\nComponents: stable\nArchitectures: amd64\nSigned-By: /etc/apt/keyrings/docker.asc\n"
 def release_repository(source, local=False):
     path = pathlib.Path(source) / "release-source.json"
     try:
@@ -138,11 +168,12 @@ def command(args, proxy=""):
     if proxy:
         env.update(https_proxy=proxy, http_proxy=proxy, HTTPS_PROXY=proxy, HTTP_PROXY=proxy)
     subprocess.run(args, env=env, check=True)
-def ensure_docker(proxy):
+def ensure_docker(proxy, codename):
     if shutil.which("docker"):
         command(["docker", "info", "--format", "Docker daemon ready"])
         command(["docker", "compose", "version"])
         return
+    repository_source = docker_repository_source(codename)
     existing_daemon = subprocess.run(["systemctl", "is-active", "--quiet", "docker"], capture_output=True).returncode == 0
     docker_data = pathlib.Path("/var/lib/docker")
     existing_data = docker_data.is_dir() and any(docker_data.iterdir())
@@ -152,7 +183,7 @@ def ensure_docker(proxy):
     pathlib.Path("/etc/apt/keyrings").mkdir(mode=0o755, exist_ok=True)
     command(["curl", "--fail", "--silent", "--show-error", "--location", "--proto", "=https", "https://download.docker.com/linux/ubuntu/gpg", "-o", "/etc/apt/keyrings/docker.asc"], proxy)
     os.chmod("/etc/apt/keyrings/docker.asc", 0o644)
-    atomic("/etc/apt/sources.list.d/dnd-ai-arahort-docker.sources", "Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: noble\nComponents: stable\nArchitectures: amd64\nSigned-By: /etc/apt/keyrings/docker.asc\n", 0o644)
+    atomic("/etc/apt/sources.list.d/dnd-ai-arahort-docker.sources", repository_source, 0o644)
     command(["apt-get", "update"], proxy)
     command(["apt-get", "install", "-y", "docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"], proxy)
     if proxy and not existing_daemon and not existing_data:
@@ -255,16 +286,21 @@ def finish(host, local):
     print("После входа отправь короткое приветствие; доступность генерации проверяется реальным ответом.")
     print("При доступе через внешний прокси настрой WebSocket на 127.0.0.1:" + host.env.get("HTTP_PORT", "8080"))
 def main():
-    parser = argparse.ArgumentParser(description="Установка DND AI Arahort на Ubuntu 24.04 x86_64")
+    parser = argparse.ArgumentParser(description="Установка DND AI Arahort на Ubuntu 22.04/24.04/26.04 LTS x86_64")
     parser.add_argument("--local", action="store_true", help="Собрать образ из готового app/, без исходников TypeScript")
     parser.add_argument("--resume", action="store_true", help="Продолжить незавершённую установку, сохранив .env и данные")
     parser.add_argument("--directory", default="/opt/dnd-ai-arahort")
     args = parser.parse_args()
+    try:
+        validate_python_runtime()
+    except ValueError as error:
+        parser.error(str(error))
     if os.geteuid() != 0 or platform.machine() != "x86_64":
         parser.error("Нужны sudo/root и x86_64")
-    release = pathlib.Path("/etc/os-release").read_text()
-    if not re.search(r'^ID=ubuntu$', release, re.M) or not re.search(r'^VERSION_ID="24\.04"$', release, re.M):
-        parser.error("Первый выпуск поддерживает Ubuntu 24.04 x86_64")
+    try:
+        codename = ubuntu_codename(pathlib.Path("/etc/os-release").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     target = pathlib.Path(args.directory).resolve()
     if not re.fullmatch(r"/[A-Za-z0-9_./-]+", str(target)) or target == pathlib.Path("/"):
         parser.error("Недопустимая папка установки")
@@ -273,7 +309,7 @@ def main():
             parser.error("Установка уже существует. Обновление: sudo dndctl update; продолжение установки: --resume")
         host = Host(target)
         local = args.local or host.env.get("DND_INSTALL_MODE") == "local"
-        ensure_docker(host.env.get("AGY_PROXY", ""))
+        ensure_docker(host.env.get("AGY_PROXY", ""), codename)
         return finish(host, local)
     repository = release_repository(SOURCE, args.local)
     if args.local and not (SOURCE / "app/server/index.mjs").is_file():
@@ -282,7 +318,7 @@ def main():
         parser.error("Папка уже содержит файлы; существующую установку не перезаписываю")
     proxy = proxy_question()
     network = network_question()
-    ensure_docker(proxy)
+    ensure_docker(proxy, codename)
     copy_distribution(target, args.local)
     try:
         gid = grp.getgrnam("dnd-updater").gr_gid

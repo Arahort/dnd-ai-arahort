@@ -9,7 +9,7 @@ Gemini ONLY: 3.8 Flash High by default; configurable low/medium/high. No Claude/
 Edge TTS only. No Silero, Ollama, vectors or pgvector. Memory uses PostgreSQL Russian full-text search.
 Use real HttpOnly session authentication for HTTP and Socket.IO; never trust client-supplied userId for identity.
 Registration requires a one-use invitation issued by an administrator. No corporate email restriction or master password.
-Installer asks Russia/proxy first, then domain/IP mode and administrator login/password. Ubuntu 24.04 x86_64.
+Installer asks Russia/proxy first, then domain/IP mode and administrator login/password. Support Ubuntu 22.04, 24.04 and 26.04 LTS x86_64; Python 3.10.12+ with tarfile.data_filter. Preserve existing Docker installations and running VPN services.
 The author's update repository is embedded in release-source.json by publication; never ask end users for owner/repository. An empty repository is valid only for local testing without remote updates.
 README is an end-user guide: recommend one-shots and preparing the world, characters and plot with AI before creating a party. Author build instructions live in docs/publishing.md.
 Public GitHub distribution must not contain existing secrets, accounts, parties, uploads, old logs or development history.

@@ -1,6 +1,7 @@
 # Установка и сеть
 Автор: Arahort — arahort.pro, alex@arahort.pro.
 ## Что устанавливается
+Поддерживаются Ubuntu Server 22.04 (Jammy), 24.04 (Noble) и 26.04 (Resolute) LTS на x86_64. При установке нового Docker выбирается официальный apt-репозиторий соответствующего выпуска. Существующий Docker проверяется без переустановки, перезапуска daemon и изменения его proxy-настроек.
 - Docker Engine, Compose и Buildx из репозитория Docker, если Docker отсутствует. Существующий Docker не переустанавливается; должны работать daemon и Compose plugin.
 - Приложение на Node.js 22 и закреплённая Antigravity CLI 1.4.6 внутри образа. Бинарник AGY загружается из официального хранилища Google и проверяется SHA-512, полученным из официального manifest. AGY не является npm-пакетом этого приложения.
 - PostgreSQL 16 без vector extension и Caddy для режима автоматического HTTPS.

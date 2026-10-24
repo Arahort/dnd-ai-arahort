@@ -1,0 +1,40 @@
+name: Installer compatibility
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ubuntu:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: '22.04'
+            codename: jammy
+          - version: '24.04'
+            codename: noble
+          - version: '26.04'
+            codename: resolute
+    container:
+      image: ubuntu:${{ matrix.version }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      PYTHONDONTWRITEBYTECODE: '1'
+      EXPECTED_CODENAME: ${{ matrix.codename }}
+    steps:
+      - name: Install test prerequisites
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3 python3-yaml git ca-certificates
+      - uses: actions/checkout@v4
+      - name: Verify the real container release and Python
+        run: python3 -c 'import os,pathlib,sys; sys.path.insert(0,"ops"); import install; install.validate_python_runtime(); actual=install.ubuntu_codename(pathlib.Path("/etc/os-release").read_text()); assert actual==os.environ["EXPECTED_CODENAME"], actual; print(sys.version); print(actual)'
+      - name: Test installer and updater without modifying services
+        run: python3 -m unittest discover -s ops -p 'test_*.py'
+      - name: Verify Python and shell syntax
+        run: |
+          python3 -c 'import ast,pathlib; files=[*pathlib.Path("ops").glob("*.py"),*pathlib.Path("tools").glob("*.py")]; [ast.parse(path.read_text(encoding="utf-8"),filename=str(path)) for path in files]; print("Python syntax verified")'
+          bash -n install.sh

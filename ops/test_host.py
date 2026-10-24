@@ -17,6 +17,16 @@ import threading
 import types
 import unittest
 from unittest.mock import patch
+def installer_module():
+    try:
+        import grp
+    except ImportError:
+        sys.modules["grp"] = types.SimpleNamespace()
+    sys.modules["host"] = host_module
+    spec = importlib.util.spec_from_file_location("dnd_installer", pathlib.Path(__file__).with_name("install.py"))
+    installer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(installer)
+    return installer
 try:
     import fcntl
 except ImportError:
@@ -66,6 +76,41 @@ class FakeHost(host_module.Host):
             raise RuntimeError("candidate health failed")
         return {"ok": True}
 class HostTests(unittest.TestCase):
+    def test_ubuntu_lts_versions_map_to_their_own_docker_repository_and_reject_other_systems(self):
+        installer = installer_module()
+        for version, codename in (("22.04", "jammy"), ("24.04", "noble"), ("26.04", "resolute")):
+            with self.subTest(version=version):
+                text = f'PRETTY_NAME="Ubuntu {version}.2 LTS"\nID=ubuntu\nVERSION_ID="{version}"\nVERSION_CODENAME={codename}\nUBUNTU_CODENAME={codename}\n'
+                actual = installer.ubuntu_codename(text)
+                self.assertEqual(actual, codename)
+                repository = installer.docker_repository_source(actual)
+                self.assertIn(f"\nSuites: {codename}\n", repository)
+                self.assertIn("URIs: https://download.docker.com/linux/ubuntu\n", repository)
+                self.assertEqual(installer.ubuntu_codename(f'ID="ubuntu"\nVERSION_ID={version}\n'), codename)
+        invalid = ['ID=debian\nVERSION_ID="24.04"\n', 'ID=linuxmint\nID_LIKE=ubuntu\nVERSION_ID="22.04"\n', 'ID=ubuntu\nVERSION_ID="20.04"\n', 'ID=ubuntu\nVERSION_ID="24.10"\n', 'ID=ubuntu\nVERSION_ID="26.10"\n', 'ID=ubuntu\nVERSION_ID="22.04.2"\n', 'ID=ubuntu\nVERSION_ID="22.04"\nVERSION_CODENAME=noble\n', 'ID=ubuntu\nVERSION_ID="26.04"\nUBUNTU_CODENAME="resolute;command"\n', 'ID=ubuntu\nVERSION_ID="22.04"\nVERSION_ID="24.04"\n', 'ID=ubuntu\nVERSION_ID="24.04\n']
+        for text in invalid:
+            with self.subTest(invalid=text), self.assertRaises(ValueError):
+                installer.ubuntu_codename(text)
+        with self.assertRaises(ValueError):
+            installer.docker_repository_source("jammy\nInjected: yes")
+    def test_existing_docker_for_amnezia_is_inspected_without_apt_service_or_proxy_changes(self):
+        installer = installer_module()
+        with patch.object(installer.shutil, "which", return_value="/usr/bin/docker"), patch.object(installer, "command") as commands, patch.object(installer, "atomic", side_effect=AssertionError("Existing Docker configuration must not be written")), patch.object(installer.subprocess, "run", side_effect=AssertionError("No extra systemctl or apt probes permitted")):
+            installer.ensure_docker("http://private:password@proxy.test:3128", "jammy")
+            self.assertEqual([entry.args[0] for entry in commands.call_args_list], [["docker", "info", "--format", "Docker daemon ready"], ["docker", "compose", "version"]])
+        with patch.object(installer.shutil, "which", return_value="/usr/bin/docker"), patch.object(installer, "command", side_effect=subprocess.CalledProcessError(1, ["docker", "info"])) as commands, patch.object(installer, "atomic", side_effect=AssertionError("No repair by overwriting config")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                installer.ensure_docker("", "jammy")
+            self.assertEqual(commands.call_count, 1, "A failed existing daemon must not be repaired by apt or restart")
+    def test_installer_requires_safe_tar_filter_on_python_31012_or_newer(self):
+        installer = installer_module()
+        for version in ((3, 10, 12), (3, 12, 0), (3, 14, 0)):
+            with self.subTest(version=version), patch.object(installer.sys, "version_info", version), patch.object(installer.tarfile, "data_filter", lambda *_args: None, create=True):
+                installer.validate_python_runtime()
+        with patch.object(installer.sys, "version_info", (3, 10, 11)), self.assertRaisesRegex(ValueError, "3.10.12"):
+            installer.validate_python_runtime()
+        with patch.object(installer.sys, "version_info", (3, 12, 0)), patch.object(installer.tarfile, "data_filter", None), self.assertRaisesRegex(ValueError, "data_filter"):
+            installer.validate_python_runtime()
     def test_env_roundtrip_preserves_unrelated_values_and_no_evaluation(self):
         with tempfile.TemporaryDirectory() as folder:
             path = pathlib.Path(folder) / ".env"
@@ -315,7 +360,7 @@ class HostTests(unittest.TestCase):
             installed = types.SimpleNamespace(env={"DND_INSTALL_MODE": "local", "AGY_PROXY": "saved-proxy"})
             with patch.object(installer, "SOURCE", source), patch.object(installer.os, "geteuid", return_value=0, create=True), patch.object(installer.platform, "machine", return_value="x86_64"), patch.object(pathlib.Path, "read_text", read_for_test), patch.object(re, "fullmatch", match_for_test), patch.object(sys, "argv", ["install.py", "--resume", "--directory", str(target)]), patch.object(installer, "release_repository", side_effect=AssertionError("Resume must keep the saved installation repository")), patch.object(installer, "Host", return_value=installed), patch.object(installer, "ensure_docker") as docker, patch.object(installer, "finish") as finish:
                 installer.main()
-                docker.assert_called_once_with("saved-proxy")
+                docker.assert_called_once_with("saved-proxy", "noble")
                 finish.assert_called_once_with(installed, True)
             self.assertEqual(saved.read_text(), "PRESERVED='configuration'\n")
 if __name__ == "__main__":
