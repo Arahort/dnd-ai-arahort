@@ -3,7 +3,7 @@ import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const app = path.join(root, 'app')
-const required = ['server/index.mjs', 'server/admin-cli.mjs', 'client/index.html', 'prompts/dm.md', 'data/dnd-ru/items.json', 'package.json', 'package-lock.json', 'release.json', 'LICENSE']
+const required = ['server/index.mjs', 'server/admin-cli.mjs', 'server/agy-cli.mjs', 'client/index.html', 'prompts/dm.md', 'data/dnd-ru/items.json', 'package.json', 'package-lock.json', 'release.json', 'LICENSE']
 for (const file of required) if (!fs.existsSync(path.join(app, file))) throw new Error('Missing release file: ' + file)
 const packageData = JSON.parse(fs.readFileSync(path.join(app, 'package.json'), 'utf8'))
 if (packageData.scripts || packageData.devDependencies) throw new Error('Runtime package must contain no build scripts or development dependencies')

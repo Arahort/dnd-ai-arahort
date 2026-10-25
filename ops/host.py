@@ -120,10 +120,10 @@ def build_login_args(root, mode, environment):
     root = pathlib.Path(root)
     network = "compose.https.yaml" if mode == "https" else "compose.http.yaml"
     forwarded = [part for key in ssh_keys for part in ("-e", key)]
-    # Existing container proxy/HOME are retained; Google activation must not inherit app secrets.
+    # The container launcher applies the saved proxy; activation must not inherit app secrets.
     denied = ("PG_HOST", "PG_PORT", "PG_DATABASE", "PG_USER", "PG_PASSWORD", "DATABASE_URL", "PGPASSWORD", "PGPASSFILE", "DND_SESSION_SECRET", "SESSION_SECRET", "DND_UPDATE_TOKEN", "GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS")
     scrubbed = [part for key in denied for part in ("-u", key)]
-    return ["docker", "--host", "unix:///var/run/docker.sock", "compose", "--project-name", "dnd-ai-arahort", "--env-file", str(root / ".env"), "-f", "compose.yaml", "-f", network, "exec", "--workdir", "/data/work", *forwarded, "-e", "AGY_CLI_DISABLE_AUTO_UPDATE=true", "app", "env", *scrubbed, "agy", "--dangerously-skip-permissions"]
+    return ["docker", "--host", "unix:///var/run/docker.sock", "compose", "--project-name", "dnd-ai-arahort", "--env-file", str(root / ".env"), "-f", "compose.yaml", "-f", network, "exec", "--workdir", "/data/work", *forwarded, "app", "env", *scrubbed, "agy", "--dangerously-skip-permissions"]
 class Host:
     def __init__(self, root=ROOT):
         self.root = pathlib.Path(root).resolve()

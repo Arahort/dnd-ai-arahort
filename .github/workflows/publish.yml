@@ -79,6 +79,7 @@ jobs:
             exit 1
           fi
           docker run --rm --network none --entrypoint node -e "EXPECTED_VERSION=${RELEASE_TAG#v}" "$image" -e 'const fs=require("node:fs"); const data=JSON.parse(fs.readFileSync("/app/release.json","utf8")); if(data.version!==process.env.EXPECTED_VERSION||data.schemaVersion!==1)process.exit(1); console.log("Compiled image version verified:",data.version)'
+          docker run --rm --network none --security-opt no-new-privileges:true --cap-drop ALL -e "EXPECTED_VERSION=${RELEASE_TAG#v}" -v "$PWD/tools/smoke-runtime.mjs:/tmp/dnd-runtime-smoke.mjs:ro" "$image" node /tmp/dnd-runtime-smoke.mjs
       - name: Write release manifest
         env:
           RELEASE_TAG: ${{ inputs.tag }}

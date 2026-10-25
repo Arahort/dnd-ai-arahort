@@ -30,6 +30,16 @@ class DistributionTests(unittest.TestCase):
             self.archive(source)
             validator.extract(source, pathlib.Path(folder) / "destination", "v0.1.0")
             self.assertTrue((pathlib.Path(folder) / "destination/app/server/index.mjs").exists())
+    def test_new_release_requires_writable_agy_launcher(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            source = root / "app.tar.gz"
+            self.archive(source, version="0.1.3")
+            with self.assertRaisesRegex(ValueError, "AGY launcher"):
+                validator.extract(source, root / "missing", "v0.1.3")
+            self.archive(source, {"app/server/agy-cli.mjs": "export const launcher = true"}, version="0.1.3")
+            validator.extract(source, root / "accepted", "v0.1.3")
+            self.assertTrue((root / "accepted/app/server/agy-cli.mjs").is_file())
     def test_rejects_sources_secrets_paths_and_version_mismatch(self):
         for name in ("../escape", "app/../escape", "app/server/index.ts", "app/client/main.js.map", "app/.env", "app/uploads/file.png", ".private/server.js", "app/client\\private.js"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as folder:

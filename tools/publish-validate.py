@@ -47,6 +47,8 @@ def extract(source, destination, version, checksum=None):
     for name in ("server/index.mjs", "server/admin-cli.mjs", "package.json", "package-lock.json", "client/index.html", "release.json"):
         if not (app / name).is_file():
             raise ValueError("Missing compiled release file: " + name)
+    if tuple(map(int, version[1:].split("."))) >= (0, 1, 3) and not (app / "server/agy-cli.mjs").is_file():
+        raise ValueError("Missing writable AGY launcher: server/agy-cli.mjs")
     release = json.loads((app / "release.json").read_text(encoding="utf-8"))
     if release.get("version") != version[1:] or release.get("schemaVersion") != 1:
         raise ValueError("Compiled version/schema does not match the selected release")

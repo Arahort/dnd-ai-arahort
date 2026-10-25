@@ -315,7 +315,7 @@ class HostTests(unittest.TestCase):
         environment = {"SSH_CONNECTION": "192.0.2.20 40400 192.0.2.10 22", "SSH_CLIENT": "192.0.2.20 40400 22", "SSH_TTY": "/dev/pts/4", "PG_PASSWORD": "never-copy-db-password", "GOOGLE_API_KEY": "never-copy-google-key", "DND_UPDATE_TOKEN": "never-copy-update-token", "HTTP_PROXY": "http://user:password@proxy.test:3128"}
         arguments = host_module.build_login_args(pathlib.Path("/opt/dnd-ai-arahort"), "https", environment)
         forwarded = [arguments[index + 1] for index, item in enumerate(arguments[:-1]) if item == "-e"]
-        self.assertEqual(forwarded, ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "AGY_CLI_DISABLE_AUTO_UPDATE=true"])
+        self.assertEqual(forwarded, ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"])
         self.assertIn("compose.https.yaml", arguments)
         self.assertEqual(arguments[arguments.index("--workdir") + 1], "/data/work")
         self.assertEqual(arguments[-2:], ["agy", "--dangerously-skip-permissions"])
@@ -328,7 +328,7 @@ class HostTests(unittest.TestCase):
         for key in ("PG_PASSWORD", "DATABASE_URL", "DND_SESSION_SECRET", "DND_UPDATE_TOKEN", "GOOGLE_API_KEY", "GEMINI_API_KEY"):
             self.assertIn(key, removed)
         partial = host_module.build_login_args(pathlib.Path("/opt/dnd-ai-arahort"), "http", {"SSH_CONNECTION": "remote-marker"})
-        self.assertEqual(partial.count("-e"), 2)
+        self.assertEqual(partial.count("-e"), 1)
         self.assertEqual(partial.count("--dangerously-skip-permissions"), 1)
         with self.assertRaisesRegex(RuntimeError, "sudo --preserve-env=SSH_CONNECTION,SSH_CLIENT,SSH_TTY dndctl login"):
             host_module.build_login_args(pathlib.Path("/opt/dnd-ai-arahort"), "http", {"PG_PASSWORD": "secret"})
@@ -383,7 +383,7 @@ class HostTests(unittest.TestCase):
                 self.assertEqual(command, "docker")
                 self.assertTrue((host.state / "data/work").is_dir())
                 self.assertEqual(arguments[arguments.index("--workdir") + 1], "/data/work")
-                self.assertIn("AGY_CLI_DISABLE_AUTO_UPDATE=true", arguments)
+                self.assertNotIn("AGY_CLI_DISABLE_AUTO_UPDATE=true", arguments)
                 raise RuntimeError("intercepted interactive exec")
             with patch.object(host_module, "Host", return_value=host), patch.object(sys, "argv", ["host.py", "login"]), patch.dict(os.environ, {"SSH_CONNECTION": "remote-marker"}, clear=True), patch.object(os, "geteuid", return_value=0, create=True), patch.object(os, "chown", create=True), patch.object(os, "fchown", create=True), patch.object(os, "chdir") as chdir, patch.object(os, "execvp", side_effect=intercepted_exec):
                 with self.assertRaisesRegex(RuntimeError, "intercepted interactive exec"):

@@ -24,7 +24,7 @@ fs.rmSync(output, {recursive: true, force: true})
 fs.mkdirSync(path.join(output, 'server'), {recursive: true})
 run([path.join(source, 'node_modules/vite/bin/vite.js'), 'build', '--outDir', path.join(output, 'client'), '--emptyOutDir'])
 const bundled = await build({
-  entryPoints: [path.join(source, 'server/index.ts'), path.join(source, 'server/admin-cli.ts')],
+  entryPoints: {'index': path.join(source, 'server/index.ts'), 'admin-cli': path.join(source, 'server/admin-cli.ts'), 'agy-cli': path.join(source, 'server/agyCli.ts')},
   outdir: path.join(output, 'server'),
   outExtension: {'.js': '.mjs'},
   bundle: true,
