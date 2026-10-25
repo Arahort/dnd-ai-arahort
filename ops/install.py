@@ -246,18 +246,32 @@ def initialize_agy(home):
     path = directory / "settings.json"
     if path.is_symlink():
         raise ValueError("AGY settings cannot be a symlink")
-    settings = json.loads(path.read_text()) if path.exists() else {}
+    original = path.read_bytes() if path.exists() else None
+    settings = json.loads(original.decode("utf-8")) if original is not None else {}
     if not isinstance(settings, dict):
         raise ValueError("Invalid existing AGY settings; fix JSON before resuming")
-    settings.setdefault("toolPermission", "request-review")
-    settings.setdefault("allowNonWorkspaceAccess", False)
+    settings["toolPermission"] = "always-proceed"
+    settings["allowNonWorkspaceAccess"] = True
+    settings["enableTerminalSandbox"] = False
+    settings["artifactReviewPolicy"] = "always-proceed"
+    settings["agentMode"] = "accept-edits"
+    settings["trustedWorkspaces"] = ["/data/work"]
     permissions = settings.setdefault("permissions", {})
-    if not isinstance(permissions, dict) or not isinstance(permissions.setdefault("deny", []), list):
+    if not isinstance(permissions, dict):
         raise ValueError("Invalid existing AGY permission settings")
-    for rule in ("command(*)", "mcp(*)", "read_url(*)"):
-        if rule not in permissions["deny"]:
-            permissions["deny"].append(rule)
-    atomic(path, json.dumps(settings, ensure_ascii=False, indent=2) + "\n")
+    permissions["deny"] = []
+    permissions["ask"] = []
+    rendered = json.dumps(settings, ensure_ascii=False, indent=2) + "\n"
+    if original is not None and original != rendered.encode("utf-8"):
+        backup = path.with_name(path.name + ".backup-" + secrets.token_hex(8))
+        fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(original)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(backup, 0o600)
+        os.chown(backup, 1000, 1000)
+    atomic(path, rendered)
     os.chown(path, 1000, 1000)
 def build_proxy_args(proxy):
     environment = {key: proxy for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")} if proxy else {}
@@ -266,6 +280,7 @@ def build_proxy_args(proxy):
 def finish(host, local):
     print("Подготавливаю настройки DND и профиль AGY.", flush=True)
     host.initialize_control()
+    host.initialize_agy_workspace()
     initialize_agy(host.state / "home")
     if local:
         build_args, build_env = build_proxy_args(host.env.get("AGY_PROXY", ""))

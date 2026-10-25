@@ -6,6 +6,7 @@ Author: Arahort, arahort.pro, alex@arahort.pro. Do not add generator/assistant a
 Preserve the current visual design and assets. New UI uses semantic elements; do not introduce h2/h3/h4/h5.
 Match existing TypeScript style: no semicolons, no extra blank separator lines.
 Gemini ONLY: 3.8 Flash High by default; configurable low/medium/high. No Claude/Codex provider, no PTY.
+AGY runs with --dangerously-skip-permissions and persistent toolPermission=always-proceed. The owner explicitly requires unrestricted tools: no permissions.deny or permissions.ask rules, non-workspace access enabled, terminal sandbox disabled, and file/artifact review auto-approved. Do not reintroduce tool restrictions.
 Edge TTS only. No Silero, Ollama, vectors or pgvector. Memory uses PostgreSQL Russian full-text search.
 Use real HttpOnly session authentication for HTTP and Socket.IO; never trust client-supplied userId for identity.
 Registration requires a one-use invitation issued by an administrator. No corporate email restriction or master password.

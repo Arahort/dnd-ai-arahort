@@ -315,9 +315,10 @@ class HostTests(unittest.TestCase):
         environment = {"SSH_CONNECTION": "192.0.2.20 40400 192.0.2.10 22", "SSH_CLIENT": "192.0.2.20 40400 22", "SSH_TTY": "/dev/pts/4", "PG_PASSWORD": "never-copy-db-password", "GOOGLE_API_KEY": "never-copy-google-key", "DND_UPDATE_TOKEN": "never-copy-update-token", "HTTP_PROXY": "http://user:password@proxy.test:3128"}
         arguments = host_module.build_login_args(pathlib.Path("/opt/dnd-ai-arahort"), "https", environment)
         forwarded = [arguments[index + 1] for index, item in enumerate(arguments[:-1]) if item == "-e"]
-        self.assertEqual(forwarded, ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"])
+        self.assertEqual(forwarded, ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "AGY_CLI_DISABLE_AUTO_UPDATE=true"])
         self.assertIn("compose.https.yaml", arguments)
-        self.assertEqual(arguments[-1], "agy")
+        self.assertEqual(arguments[arguments.index("--workdir") + 1], "/data/work")
+        self.assertEqual(arguments[-2:], ["agy", "--dangerously-skip-permissions"])
         self.assertNotIn("-T", arguments, "Interactive OAuth needs the real terminal")
         for value in environment.values():
             self.assertNotIn(value, arguments)
@@ -327,9 +328,67 @@ class HostTests(unittest.TestCase):
         for key in ("PG_PASSWORD", "DATABASE_URL", "DND_SESSION_SECRET", "DND_UPDATE_TOKEN", "GOOGLE_API_KEY", "GEMINI_API_KEY"):
             self.assertIn(key, removed)
         partial = host_module.build_login_args(pathlib.Path("/opt/dnd-ai-arahort"), "http", {"SSH_CONNECTION": "remote-marker"})
-        self.assertEqual(partial.count("-e"), 1)
+        self.assertEqual(partial.count("-e"), 2)
+        self.assertEqual(partial.count("--dangerously-skip-permissions"), 1)
         with self.assertRaisesRegex(RuntimeError, "sudo --preserve-env=SSH_CONNECTION,SSH_CLIENT,SSH_TTY dndctl login"):
             host_module.build_login_args(pathlib.Path("/opt/dnd-ai-arahort"), "http", {"PG_PASSWORD": "secret"})
+    def test_agy_workspace_is_created_for_clean_installation_and_preserves_existing_results(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            state = root / "state"
+            state.mkdir()
+            host_module.set_env(root / ".env", {"DND_STATE_DIR": str(state)})
+            host = host_module.Host(root)
+            with patch.object(os, "chown", create=True) as chown, patch.object(os, "fchown", create=True) as fchown:
+                work = host.initialize_agy_workspace()
+                self.assertEqual(work, state / "data/work")
+                if os.name == "posix":
+                    self.assertEqual(fchown.call_count, 2)
+                    self.assertTrue(all(call.args[1:] == (1000, 1000) for call in fchown.call_args_list))
+                else:
+                    chown.assert_any_call(state / "data", 1000, 1000)
+                    chown.assert_any_call(work, 1000, 1000)
+                result = work / "existing-image.jpg"
+                result.write_bytes(b"existing-result")
+                os.chmod(work, 0o755)
+                self.assertEqual(host.initialize_agy_workspace(), work)
+            self.assertEqual(result.read_bytes(), b"existing-result")
+            if os.name == "posix":
+                self.assertEqual(work.stat().st_mode & 0o777, 0o700)
+    def test_agy_workspace_refuses_symlinked_data_or_work_before_changing_ownership(self):
+        for name in ("data", "work"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as folder:
+                host = FakeHost(folder)
+                rejected = host.state / "data" if name == "data" else host.state / "data/work"
+                with patch.object(pathlib.Path, "is_symlink", autospec=True, side_effect=lambda path: path == rejected), patch.object(os, "chown", create=True) as chown, patch.object(os, "fchown", create=True) as fchown:
+                    with self.assertRaisesRegex(ValueError, "cannot be a symlink"):
+                        host.initialize_agy_workspace()
+                chown.assert_not_called()
+                fchown.assert_not_called()
+    def test_agy_workspace_rejects_existing_file_without_replacing_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            host = FakeHost(folder)
+            work = host.state / "data/work"
+            work.write_bytes(b"keep-existing-file")
+            with patch.object(os, "chown", create=True) as chown, patch.object(os, "fchown", create=True) as fchown:
+                with self.assertRaises(OSError):
+                    host.initialize_agy_workspace()
+            self.assertEqual(work.read_bytes(), b"keep-existing-file")
+            chown.assert_not_called()
+            fchown.assert_not_called()
+    def test_login_prepares_writable_workspace_before_interactive_exec(self):
+        with tempfile.TemporaryDirectory() as folder:
+            host = FakeHost(folder)
+            def intercepted_exec(command, arguments):
+                self.assertEqual(command, "docker")
+                self.assertTrue((host.state / "data/work").is_dir())
+                self.assertEqual(arguments[arguments.index("--workdir") + 1], "/data/work")
+                self.assertIn("AGY_CLI_DISABLE_AUTO_UPDATE=true", arguments)
+                raise RuntimeError("intercepted interactive exec")
+            with patch.object(host_module, "Host", return_value=host), patch.object(sys, "argv", ["host.py", "login"]), patch.dict(os.environ, {"SSH_CONNECTION": "remote-marker"}, clear=True), patch.object(os, "geteuid", return_value=0, create=True), patch.object(os, "chown", create=True), patch.object(os, "fchown", create=True), patch.object(os, "chdir") as chdir, patch.object(os, "execvp", side_effect=intercepted_exec):
+                with self.assertRaisesRegex(RuntimeError, "intercepted interactive exec"):
+                    host_module.main()
+            chdir.assert_called_once_with(host.root)
     def test_socket_protocol_rejects_arbitrary_commands_fields_and_oversized_body(self):
         with tempfile.TemporaryDirectory() as folder:
             host = FakeHost(folder)
@@ -364,24 +423,55 @@ class HostTests(unittest.TestCase):
             home = pathlib.Path(folder)
             settings = home / ".gemini/antigravity-cli/settings.json"
             settings.parent.mkdir(parents=True)
-            settings.write_text(json.dumps({"model": "Existing model", "permissions": {"allow": ["read_file(assets)"]}}))
+            existing = {"model": "Existing model", "effort": "medium", "toolPermission": "request-review", "allowNonWorkspaceAccess": False, "enableTerminalSandbox": True, "artifactReviewPolicy": "request-review", "agentMode": "plan", "trustedWorkspaces": ["/app", "/data/work", "/unrelated/trusted"], "theme": {"name": "existing-theme"}, "mcpServers": {"existing": {"command": "keep-command", "args": ["keep-argument"]}}, "permissions": {"allow": ["read_file(assets)"], "deny": ["command(*)", "mcp(*)", "read_url(*)", "generate_image(*)"], "ask": ["write_to_file(*)"], "custom": "preserved"}}
+            original = json.dumps(existing, ensure_ascii=False).encode("utf-8")
+            settings.write_bytes(original)
             auth = settings.parent / "account-test.json"
             auth.write_text("existing-account-sentinel")
-            with patch.object(os, "chown", create=True):
+            with patch.object(os, "chown", create=True) as chown:
                 installer.initialize_agy(home)
             changed = json.loads(settings.read_text())
-            self.assertEqual(changed["model"], "Existing model")
-            self.assertEqual(changed["permissions"]["allow"], ["read_file(assets)"])
-            self.assertIn("command(*)", changed["permissions"]["deny"])
-            self.assertIn("mcp(*)", changed["permissions"]["deny"])
-            self.assertIn("read_url(*)", changed["permissions"]["deny"])
-            self.assertEqual(changed["toolPermission"], "request-review")
+            self.assertEqual(changed, {**existing, "toolPermission": "always-proceed", "allowNonWorkspaceAccess": True, "enableTerminalSandbox": False, "artifactReviewPolicy": "always-proceed", "agentMode": "accept-edits", "trustedWorkspaces": ["/data/work"], "permissions": {**existing["permissions"], "deny": [], "ask": []}})
+            backups = list(settings.parent.glob("settings.json.backup-*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), original)
+            chown.assert_any_call(settings, 1000, 1000)
+            chown.assert_any_call(backups[0], 1000, 1000)
+            if os.name == "posix":
+                self.assertEqual(settings.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(backups[0].stat().st_mode & 0o777, 0o600)
+            initialized = settings.read_bytes()
+            with patch.object(os, "chown", create=True):
+                installer.initialize_agy(home)
+            self.assertEqual(settings.read_bytes(), initialized)
+            self.assertEqual(list(settings.parent.glob("settings.json.backup-*")), backups, "Idempotent initialization must not create duplicate backups")
             self.assertEqual(auth.read_text(), "existing-account-sentinel")
             arguments, environment = installer.build_proxy_args("http://account:secret@proxy.test:3128")
             self.assertFalse(any("secret" in argument or "proxy.test" in argument or "=" in argument for argument in arguments))
             self.assertEqual(environment["HTTPS_PROXY"], "http://account:secret@proxy.test:3128")
             self.assertEqual(arguments.count("--build-arg"), 4)
             self.assertEqual(installer.build_proxy_args(""), ([], {}))
+    def test_agy_initialization_creates_unrestricted_profile_without_unrelated_settings(self):
+        installer = installer_module()
+        with tempfile.TemporaryDirectory() as folder:
+            home = pathlib.Path(folder)
+            with patch.object(os, "chown", create=True):
+                installer.initialize_agy(home)
+            settings = home / ".gemini/antigravity-cli/settings.json"
+            self.assertEqual(json.loads(settings.read_text()), {"toolPermission": "always-proceed", "allowNonWorkspaceAccess": True, "enableTerminalSandbox": False, "artifactReviewPolicy": "always-proceed", "agentMode": "accept-edits", "trustedWorkspaces": ["/data/work"], "permissions": {"deny": [], "ask": []}})
+            self.assertEqual(list(settings.parent.glob("settings.json.backup-*")), [])
+    def test_agy_initialization_does_not_replace_settings_if_backup_cannot_be_saved(self):
+        installer = installer_module()
+        with tempfile.TemporaryDirectory() as folder:
+            home = pathlib.Path(folder)
+            settings = home / ".gemini/antigravity-cli/settings.json"
+            settings.parent.mkdir(parents=True)
+            original = b'{"permissions":{"deny":["generate_image(*)"]},"model":"keep-model"}'
+            settings.write_bytes(original)
+            with patch.object(installer.os, "open", side_effect=PermissionError("cannot create backup")):
+                with self.assertRaises(PermissionError):
+                    installer.initialize_agy(home)
+            self.assertEqual(settings.read_bytes(), original)
     def test_installer_uses_only_author_release_config_and_refuses_unbound_remote_before_changes(self):
         try:
             import grp

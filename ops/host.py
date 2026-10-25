@@ -123,7 +123,7 @@ def build_login_args(root, mode, environment):
     # Existing container proxy/HOME are retained; Google activation must not inherit app secrets.
     denied = ("PG_HOST", "PG_PORT", "PG_DATABASE", "PG_USER", "PG_PASSWORD", "DATABASE_URL", "PGPASSWORD", "PGPASSFILE", "DND_SESSION_SECRET", "SESSION_SECRET", "DND_UPDATE_TOKEN", "GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS")
     scrubbed = [part for key in denied for part in ("-u", key)]
-    return ["docker", "--host", "unix:///var/run/docker.sock", "compose", "--project-name", "dnd-ai-arahort", "--env-file", str(root / ".env"), "-f", "compose.yaml", "-f", network, "exec", *forwarded, "app", "env", *scrubbed, "agy"]
+    return ["docker", "--host", "unix:///var/run/docker.sock", "compose", "--project-name", "dnd-ai-arahort", "--env-file", str(root / ".env"), "-f", "compose.yaml", "-f", network, "exec", "--workdir", "/data/work", *forwarded, "-e", "AGY_CLI_DISABLE_AUTO_UPDATE=true", "app", "env", *scrubbed, "agy", "--dangerously-skip-permissions"]
 class Host:
     def __init__(self, root=ROOT):
         self.root = pathlib.Path(root).resolve()
@@ -170,6 +170,40 @@ class Host:
         if self.status().get("recoveryRequired") or self.status().get("phase") in ACTIVE:
             enabled = True
         self.set_startup_maintenance(enabled)
+    def initialize_agy_workspace(self):
+        data = self.state / "data"
+        if data.is_symlink() or data.resolve() != self.state / "data":
+            raise ValueError("AGY data directory cannot be a symlink or leave installation state")
+        created_data = not data.exists()
+        data.mkdir(mode=0o700, exist_ok=True)
+        work = data / "work"
+        if work.is_symlink() or work.resolve() != data / "work":
+            raise ValueError("AGY workspace cannot be a symlink or leave installation data")
+        if os.name == "posix":
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            data_fd = os.open(data, flags)
+            try:
+                if created_data:
+                    os.fchown(data_fd, 1000, 1000)
+                try:
+                    os.mkdir("work", mode=0o700, dir_fd=data_fd)
+                except FileExistsError:
+                    pass
+                work_fd = os.open("work", flags, dir_fd=data_fd)
+                try:
+                    os.fchown(work_fd, 1000, 1000)
+                    os.fchmod(work_fd, 0o700)
+                finally:
+                    os.close(work_fd)
+            finally:
+                os.close(data_fd)
+        else:
+            work.mkdir(mode=0o700, exist_ok=True)
+            if created_data:
+                os.chown(data, 1000, 1000)
+            os.chown(work, 1000, 1000)
+            os.chmod(work, 0o700)
+        return work
     def redact(self, value):
         text = str(value)
         for key in ("AGY_PROXY", "PG_PASSWORD", "DND_UPDATE_TOKEN", "DND_SESSION_SECRET"):
@@ -559,6 +593,7 @@ def main():
     if args.command == "login":
         # exec preserves the real SSH terminal for the OAuth URL/code conversation.
         arguments = build_login_args(host.root, host.env.get("DND_NETWORK_MODE", "http"), os.environ)
+        host.initialize_agy_workspace()
         os.chdir(host.root)
         for key in ("DOCKER_CONTEXT", "DOCKER_HOST", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"):
             os.environ.pop(key, None)
